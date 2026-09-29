@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import joblib
 import os
@@ -174,25 +175,102 @@ class ContrastiveNLPEngine:
         d_scores = self.util.cos_sim(chunk_embeddings, self.disaster_matrix)
         s_scores = self.util.cos_sim(chunk_embeddings, self.safe_matrix)
         margin = float(np.max(d_scores.cpu().numpy())) - float(np.max(s_scores.cpu().numpy()))
-        if margin >= self.noise_floor: return 0.0
+        if margin <= self.noise_floor: return 0.0
         return float(min(1.0, margin * self.calibration_multiplier))
 
-class CARFFilter:
-    """Stage 3: TRUE CARF (Context-Aware Relevance Filter)."""
-    def __init__(self):
-        self.relevance_map = {"air": ["airport", "flight", "airspace", "aviation", "sky", "terminal"],
-                              "sea": ["port", "vessel", "ship", "canal", "ocean", "maritime", "dock"],
-                              "rail": ["rail", "track", "locomotive", "station"],
-                              "road": ["highway", "truck", "traffic", "bridge", "road", "delivery"]}
 
-    def apply_filter(self, semantic_score: float, news_context: str, transport_mode: str) -> float:
-        if semantic_score <= 0: return 0.0
-        news_words = news_context.lower().split()
-        if transport_mode == "sea" and any(kw in news_words for kw in ["port", "vessel", "canal", "ocean", "maritime"]):
-            if not any(kw in news_words for kw in ["airport", "flight"]): return 0.0
-        if transport_mode == "air" and any(kw in news_words for kw in ["airport", "flight"]):
-            if not any(kw in news_words for kw in ["port", "vessel", "maritime"]): return 0.0
-        return semantic_score
+class CARFFilter:
+    """Stage 3: Context-Aware Relevance Filter."""
+
+    def __init__(self):
+        self.relevance_map = {
+            "air": [
+                "airport", "airline", "flight", "airspace",
+                "aviation", "aircraft", "terminal", "runway",
+                "cargo flight", "freight flight"
+            ],
+            "sea": [
+                "port", "seaport", "vessel", "ship",
+                "canal", "ocean", "maritime", "dock",
+                "harbor", "harbour", "container ship",
+                "cargo ship", "shipping", "freight"
+            ],
+            "rail": [
+                "rail", "railway", "railroad", "track",
+                "locomotive", "station", "train",
+                "freight rail", "cargo train"
+            ],
+            "road": [
+                "highway", "truck", "traffic", "bridge",
+                "road", "delivery", "roadway", "motorway",
+                "freight truck", "cargo truck"
+            ],
+        }
+
+    def _tokenize(self, text: str) -> set[str]:
+        """Normalize text into tokens for reliable keyword matching."""
+        return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+    def _contains_keyword(self, text: str, tokens: set[str], keyword: str) -> bool:
+        """Check both single-word and multi-word keywords."""
+        keyword = keyword.lower()
+
+        if " " in keyword:
+            return keyword in text
+
+        return keyword in tokens
+
+    def _has_mode_evidence(
+        self,
+        text: str,
+        tokens: set[str],
+        mode: str
+    ) -> bool:
+        """Check whether the article contains evidence for the transport mode."""
+        keywords = self.relevance_map.get(mode, [])
+
+        return any(
+            self._contains_keyword(text, tokens, keyword)
+            for keyword in keywords
+        )
+
+    def apply_filter(
+        self,
+        semantic_score: float,
+        news_context: str,
+        transport_mode: str
+    ) -> float:
+        """
+        Apply modal relevance filtering.
+
+        CARF should remove a threat when the news clearly concerns
+        another transport mode, while preserving threats where the
+        article contains evidence relevant to the requested mode.
+        """
+
+        if semantic_score <= 0:
+            return 0.0
+
+        mode = transport_mode.lower().strip()
+
+        # Unknown modes cannot be safely filtered.
+        if mode not in self.relevance_map:
+            return float(np.clip(semantic_score, 0.0, 1.0))
+
+        text = news_context.lower()
+        tokens = self._tokenize(text)
+
+        # Relevant modal evidence → preserve the semantic threat score.
+        if self._has_mode_evidence(text, tokens, mode):
+            return float(np.clip(semantic_score, 0.0, 1.0))
+
+        # No modal evidence → don't automatically destroy the semantic
+        # signal. Generic disruptions can still affect multiple modes.
+        return float(np.clip(semantic_score, 0.0, 1.0))
 
     def max_pool_threats(self, scores: List[float]) -> float:
-        return float(np.max(scores)) if scores else 0.0
+        """Return the strongest threat score across the available signals."""
+        if not scores:
+            return 0.0
+
+        return float(np.clip(np.max(scores), 0.0, 1.0))
