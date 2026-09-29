@@ -146,8 +146,10 @@ class RouteRecommender:
                     u, v = path[i], path[i+1]
                     d = G_p[u][v]
                     mode = d["transport_mode"]
+                    u_data = G_p.nodes[u]
                     v_data = G_p.nodes[v]
-                    p_id = v_data.get("physical_id")
+                    u_pid = u_data.get("physical_id", u)
+                    p_id = v_data.get("physical_id", v)
                     
                     l_time = d["baseline_time"]
                     l_cost = d.get("cost", 0)
@@ -163,6 +165,18 @@ class RouteRecommender:
                         trace["eta"]["scenario"] += disruptions[p_id]["delay"]
                         trace["risk"]["scenario"] = max(trace["risk"]["scenario"], l_threat)
                         trace["cost"]["scenario"] += (l_cost * 0.1)
+
+                  
+                    ml_pred = self.predictor.predict_worst_case_delay(
+                        origin=u_pid,
+                        destination=p_id,
+                        transport_mode=mode,
+                        nlp_score=l_threat
+                    )
+                    
+                    # Add the ML predicted p85 buffer to the adjusted transit time
+                    ml_delay_buffer = ml_pred.get("p85_delay", 0.0)
+                    l_time += ml_delay_buffer
                     
                     if d["type"] == "transfer":
                         trace["eta"]["transfer"] += l_time
@@ -177,7 +191,7 @@ class RouteRecommender:
                     max_threat = max(max_threat, l_threat)
                     
                     legs.append({
-                        "from": G_p.nodes[u].get("physical_id", u),
+                        "from": u_pid,
                         "to": p_id,
                         "to_name": v_data.get("display_name", p_id),
                         "mode": mode.upper(),
@@ -186,7 +200,17 @@ class RouteRecommender:
                         "cost": round(l_cost, 2),
                         "threat": round(l_threat, 2),
                         "reason": l_news,
-                        "intel_source": l_source
+                        "intel_source": l_source,
+                        # Quantile ML Prediction Metadata
+                        "ml_risk": {
+                            "p50_delay": ml_pred.get("p50_delay"),
+                            "p85_delay": ml_pred.get("p85_delay"),
+                            "p95_delay": ml_pred.get("p95_delay"),
+                            "confidence_band": ml_pred.get("confidence_band"),
+                            "risk_tier": ml_pred.get("risk_tier"),
+                            "explainability": ml_pred.get("explainability"),
+                            "calibration_reason": ml_pred.get("calibration_reason")
+                        }
                     })
 
                 if total_cost > cost_ceiling or total_time > (max_delay * 24): continue
