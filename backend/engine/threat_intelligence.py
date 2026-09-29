@@ -1,4 +1,3 @@
-```python
 import os
 import re
 import json
@@ -14,11 +13,21 @@ import torch
 # Production Artifacts
 # ============================================================
 
-MODEL_PATH = "./Execution/risk_model.pkl"
-ENCODER_PATH = "./Execution/label_encoders.pkl"
-NLP_ANCHORS_PATH = "./Execution/nlp_anchors.pt"
-CALIBRATION_PATH = "./Execution/calibration_profiles.json"
+from pathlib import Path
 
+# threat_intelligence.py is expected to live in backend/engine/.
+# Resolve artifacts from the project structure instead of the process
+# working directory.
+ENGINE_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = ENGINE_DIR.parent
+PROJECT_DIR = BACKEND_DIR.parent
+
+EXECUTION_DIR = PROJECT_DIR / "Execution"
+
+MODEL_PATH = str(EXECUTION_DIR / "risk_model.pkl")
+ENCODER_PATH = str(EXECUTION_DIR / "label_encoders.pkl")
+NLP_ANCHORS_PATH = str(EXECUTION_DIR / "nlp_anchors.pt")
+CALIBRATION_PATH = str(EXECUTION_DIR / "calibration_profiles.json")
 
 # ============================================================
 # Deterministic operational priors
