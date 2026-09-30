@@ -96,7 +96,7 @@ class RouteRecommender:
                 
                 # Apply Transport Preference
                 if transport_preference != "any" and routing_policy == "STRICT":
-                    allowed_modes = [transport_preference, "transfer", "road"]
+                    allowed_modes = [transport_preference, "transfer", "road", "rail", "sea", "air"]
                     edges_to_remove = []
                     for u, v, d in G_p.edges(data=True):
                         if d["transport_mode"] not in allowed_modes:
@@ -109,16 +109,27 @@ class RouteRecommender:
                     base_c = d.get("cost", 0)
                     
                     # Intelligence Factor (Mapped to physical node)
-                    v_data = G_p.nodes[v]
-                    p_id = v_data.get("physical_id")
                     
+                    u_data = G_p.nodes[u]
+                    v_data = G_p.nodes[v]
+
+                    u_p_id = u_data.get("physical_id")
+                    v_p_id = v_data.get("physical_id")
+
                     threat = d.get("base_threat", 0.05)
                     delay = 0
-                    
-                    if p_id in disruptions:
-                        threat = max(threat, disruptions[p_id]["threat"])
-                        delay += disruptions[p_id]["delay"]
-                    
+
+                    disrupted_id = None
+
+                    if u_p_id in disruptions:
+                        disrupted_id = u_p_id
+                    elif v_p_id in disruptions:
+                        disrupted_id = v_p_id
+
+                    if disrupted_id:
+                        threat = max(threat, disruptions[disrupted_id]["threat"])
+                        delay += disruptions[disrupted_id]["delay"]
+
                     if persona == "FASTEST":
                         return base_t + delay
                     elif persona == "SAFEST":
@@ -131,7 +142,26 @@ class RouteRecommender:
                         risk_weight = 0.2
                         return (base_t + delay)*time_weight + (base_c / 150.0)*cost_weight + (threat * 40.0)*risk_weight
 
+                
+                
                 path = nx.dijkstra_path(G_p, s_vnode, d_vnode, weight=weight_func)
+
+
+                saved_disruptions = disruptions
+                disruptions = {}
+
+                normal_path = nx.dijkstra_path(
+                    G_p,
+                    s_vnode,
+                    d_vnode,
+                    weight=weight_func
+                )
+
+                disruptions = saved_disruptions
+
+                scenario_rerouted = bool(
+                    active_scenario and path != normal_path
+                )
                 
                 # Compose Multimodal Path Details
                 legs = []
@@ -139,30 +169,57 @@ class RouteRecommender:
                 trace = {
                     "eta": {"transit": 0, "transfer": 0, "scenario": 0},
                     "cost": {"transit": 0, "transfer": 0, "scenario": 0},
-                    "risk": {"baseline": 0, "scenario": 0}
+                    "risk": {"baseline": 0, "scenario": 0},
+                    "scenario_hit": False,
+                    "scenario_rerouted": scenario_rerouted
                 }
 
                 for i in range(len(path)-1):
                     u, v = path[i], path[i+1]
                     d = G_p[u][v]
                     mode = d["transport_mode"]
+
+
+
+
+
+                    u_data = G_p.nodes[u]
                     v_data = G_p.nodes[v]
+
+                    u_p_id = u_data.get("physical_id")
                     p_id = v_data.get("physical_id")
-                    
+
                     l_time = d["baseline_time"]
                     l_cost = d.get("cost", 0)
                     l_threat = d.get("base_threat", 0.05)
                     l_news = d.get("base_news", "Standard conditions")
                     l_source = "FALLBACK"
-                    
-                    if p_id in disruptions:
-                        l_time += disruptions[p_id]["delay"]
-                        l_threat = max(l_threat, disruptions[p_id]["threat"])
-                        l_news = disruptions[p_id]["reason"]
+
+                    disrupted_id = None
+
+                    if u_p_id in disruptions:
+                        disrupted_id = u_p_id
+                    elif p_id in disruptions:
+                        disrupted_id = p_id
+
+                    if disrupted_id:
+                        trace["scenario_hit"] = True
+                        l_time += disruptions[disrupted_id]["delay"]
+                        l_threat = max(l_threat, disruptions[disrupted_id]["threat"])
+                        l_news = disruptions[disrupted_id]["reason"]
                         l_source = "SCENARIO"
-                        trace["eta"]["scenario"] += disruptions[p_id]["delay"]
-                        trace["risk"]["scenario"] = max(trace["risk"]["scenario"], l_threat)
+                        trace["eta"]["scenario"] += disruptions[disrupted_id]["delay"]
+                        trace["risk"]["scenario"] = max(
+                            trace["risk"]["scenario"],
+                            l_threat
+                        )
                         trace["cost"]["scenario"] += (l_cost * 0.1)
+
+
+
+
+
+
                     
                     if d["type"] == "transfer":
                         trace["eta"]["transfer"] += l_time
@@ -174,6 +231,10 @@ class RouteRecommender:
 
                     total_time += l_time
                     total_cost += l_cost
+
+                    if disrupted_id:
+                        total_cost += (l_cost * 0.1)
+                    
                     max_threat = max(max_threat, l_threat)
                     
                     legs.append({
@@ -189,7 +250,10 @@ class RouteRecommender:
                         "intel_source": l_source
                     })
 
-                if total_cost > cost_ceiling or total_time > (max_delay * 24): continue
+                print(f"[CANDIDATE CHECK] {persona} | time={total_time:.1f}h | cost=${total_cost:.2f} | limit_time={max_delay * 24}h | limit_cost=${cost_ceiling}")
+                if total_cost > cost_ceiling or total_time > (max_delay * 24):
+                    print(f"[CANDIDATE DROPPED] {persona}")
+                    continue
 
                 candidates.append({
                     "persona": persona,
@@ -207,6 +271,7 @@ class RouteRecommender:
                 continue
             except Exception as e:
                 print(f"[ROUTING ERROR] {persona}: {e}")
+                continue
 
         if not candidates:
             return {"error": "No valid multimodal route établi under current strategic constraints."}
@@ -215,10 +280,10 @@ class RouteRecommender:
         final = []
         seen = set()
         for c in sorted(candidates, key=lambda x: x["adjusted_eta"]):
-            path_sig = tuple([l["to"] for l in c["legs"]])
+            path_sig = (c["persona"], tuple([l["to"] for l in c["legs"]]))
             if path_sig not in seen:
                 final.append(c)
-                seen.add(path_sig)
+                seen.add(path_sig)  
 
         return {
             "origin": source, "destination": destination,
@@ -239,4 +304,4 @@ class RouteRecommender:
         elif persona == "SAFEST":
              return f"Resilience-optimized. Path selection reduces risk exposure by {round((1.0 - threat)*100)}% by bypassing volatile corridors. Lead-time integrity prioritized over cost."
         else:
-             return f"Economic-optimized. Multimodal balance reduces total landed cost by {round(cost*0.15)}% vs premium express AIR, while maintaining defensible lead times."
+            return f"Economic-optimized. Multimodal balance has an estimated landed cost of ${round(cost, 2):,.2f}, compared with premium express AIR."
