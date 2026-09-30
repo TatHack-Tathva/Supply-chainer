@@ -16,6 +16,7 @@ const RouteRecommender = ({ onNavigate }) => {
   const [cargoType, setCargoType] = useState('general');
   const [priority, setPriority] = useState('normal');
   const [recommendations, setRecommendations] = useState([]);
+  const [activeScenario, setActiveScenario] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState({ source: '', dest: '' });
@@ -54,6 +55,7 @@ const RouteRecommender = ({ onNavigate }) => {
         setRecommendations([]);
       } else {
         setRecommendations(data.recommendations);
+        setActiveScenario(data.active_scenario);
       }
     } catch (err) {
       setError("Engine connection failed. Verify backend status.");
@@ -267,16 +269,16 @@ const RouteRecommender = ({ onNavigate }) => {
           <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
             <div className="audit-trace-box" style={{borderLeft: '4px solid #3b82f6'}}>
                <div style={{marginBottom: '0.5rem', fontWeight: 700, color: '#f8fafc'}}>Forensic ETA Audit</div>
-               <div>Transit: {recommendations[0].audit_trace.eta.transit}h</div>
-               <div>Transfer: +{recommendations[0].audit_trace.eta.transfer}h</div>
-               <div>Scenario Impact: {recommendations[0].audit_trace.eta.scenario > 0 ? `+${recommendations[0].audit_trace.eta.scenario}h` : 'None'}</div>
+               <div>Transit: {Math.max(0, recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.eta.transit - recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.eta.scenario)}h</div>
+               <div>Transfer: +{recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.eta.transfer}h</div>
+               <div>Scenario Impact: {recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.eta.scenario > 0 ? `+${recommendations.find(r => r.persona === 'BALANCED').audit_trace.eta.scenario}h` : (activeScenario ? (recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.scenario_rerouted ? 'Rerouted to avoid disruption' : 'No impact on selected route') : 'None')}</div>
             </div>
 
             <div className="audit-trace-box" style={{borderLeft: '4px solid #10b981'}}>
-               <div style={{marginBottom: '0.5rem', fontWeight: 700, color: '#f8fafc'}}>Cost Composition</div>
-               <div>Landed Base: ${recommendations[0].audit_trace.cost.transit.toLocaleString()}</div>
-               <div>Transfer Fees: ${recommendations[0].audit_trace.cost.transfer.toLocaleString()}</div>
-               <div>Risk Premium: ${recommendations[0].audit_trace.cost.scenario.toLocaleString()}</div>
+              <div style={{marginBottom: '0.5rem', fontWeight: 700, color: '#f8fafc'}}>Cost Composition</div>
+              <div>Transit Cost: ${recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.cost.transit.toLocaleString()}</div>
+              <div>Transfer Fees: ${recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.cost.transfer.toLocaleString()}</div>
+              <div>Scenario Cost: ${recommendations.find(r => r.persona === 'BALANCED')?.audit_trace.cost.scenario.toLocaleString()}</div>
             </div>
 
             <div className="audit-trace-box" style={{borderLeft: '4px solid #f59e0b'}}>

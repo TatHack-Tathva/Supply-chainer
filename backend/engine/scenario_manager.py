@@ -28,7 +28,7 @@ class ScenarioManager:
         "LA_PORT_STRIKE": {
             "name": "LA Port Strike",
             "description": "Labor dispute causing terminal shutdowns in Los Angeles.",
-            "affected_nodes": ["PORT-LOSANGELES", "PORT-LONGBEACH"],
+            "affected_nodes":["PORT-LOSANGELES","PORT-LONGBEACH","HUB-LOSANGELES"],
             "threat_level": 0.9,
             "delay_hours": 120,
             "reason": "Terminal labor strike. Picket lines at all major berths. Throughput at 0%.",
